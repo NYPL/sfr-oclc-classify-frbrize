@@ -2,13 +2,12 @@ import os
 
 from helpers.errorHelpers import OCLCError, DataError
 from helpers.logHelpers import createLog
-from lib.dataModel import Identifier
+from lib.dataModel import Agent, Identifier
 from lib.readers.oclcClassify import classifyRecord
 from lib.parsers.parseOCLC import readFromClassify, extractAndAppendEditions
 from lib.outputManager import OutputManager
 
 logger = createLog('enhancer')
-
 
 def enhanceRecord(record):
     """Takes a single input record and retrieves data from the OCLC Classify
@@ -18,7 +17,6 @@ def enhanceRecord(record):
         workUUID = record['uuid']
         searchType = record['type']
         searchFields = record['fields']
-        startPos = record.get('start', 0)
     except KeyError as e:
         logger.error('Missing attribute in data block!')
         logger.debug(e)
@@ -33,35 +31,17 @@ def enhanceRecord(record):
     try:
         # Step 1: Generate a set of XML records retrieved from Classify
         # This step also adds the oclc identifiers to the sourceData record
-        classifyData = classifyRecord(
-            searchType, searchFields, workUUID, start=startPos
-        )
+        classifyData = classifyRecord(searchType, searchFields, workUUID)
 
         # Step 2: Parse the data recieved from Classify into the SFR data model
-        classifiedWork, instanceCount, oclcNo = readFromClassify(
-            classifyData, workUUID
-        )
+        classifiedWork, instanceCount = readFromClassify(classifyData, workUUID)
         logger.debug('Instances found {}'.format(instanceCount))
         if instanceCount > 500:
-            iterStop = startPos + instanceCount
-            if instanceCount > 1500:
-                iterStop = startPos + 1500
-            for i in range(startPos + 500, iterStop, 500):
+            for i in range(500, instanceCount, 500):
                 classifyPage = classifyRecord(
                     searchType, searchFields, workUUID, start=i
                 )
                 extractAndAppendEditions(classifiedWork, classifyPage)
-
-        if instanceCount > startPos + 1500:
-            OutputManager.putQueue({
-                'type': 'identifier',
-                'uuid': workUUID,
-                'fields': {
-                    'idType': 'oclc',
-                    'identifier': oclcNo,
-                    'start': startPos + 1500
-                }
-            }, os.environ['CLASSIFY_QUEUE'])
 
         # This sets the primary identifier for processing by the db manager
         classifiedWork.primary_identifier = Identifier('uuid', workUUID, 1)
@@ -89,14 +69,10 @@ def enhanceRecord(record):
                 os.environ['OUTPUT_KINESIS'],
                 workUUID
             )
-        OutputManager.putKinesis(
-            outputObject, os.environ['OUTPUT_KINESIS'], workUUID
-        )
+        OutputManager.putKinesis(outputObject, os.environ['OUTPUT_KINESIS'], workUUID)
 
     except OCLCError as err:
-        logger.error('OCLC Query for work {} failed with message: {}'.format(
-            workUUID, err.message
-        ))
+        logger.error('OCLC Query for work {} failed with message: {}'.format(workUUID, err.message))
         raise err
 
     return True
